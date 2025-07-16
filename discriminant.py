@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun Dec  3 16:25:18 2023
+Created on Sun Dec  3 16:25:18 2024
 
-@author: gaga6
+@author: Jialin Zhang
 """
 
 import numpy as np
@@ -34,19 +34,24 @@ def Discriminant_score(X, y, labda):
     y: {numpy array}, shape (n_samples,)
         input class labels       
     labda: {numpy array}, shape (1)
+        input class labels
 
     Output
     ------
     score: {numpy array}, shape (,n_features)
-        weight score for each feature
+        fisher score for each feature
+
+    Reference
     ---------
+    He, Xiaofei et al. "Laplacian Score for Feature Selection." NIPS 2005.
+    Deng Cai et al. "Semi-supervised Discriminant Analysis." ICCV, 2007.
     """
     
     nSample, nDim = X.shape
     labels = np.unique(y)
     nClass = len(labels)
     total_mean = np.mean(X, axis=0)
-    lbd = labda
+    lbd = labda = 0.0001
     
     X_n = X - np.ones([nSample,nDim])*total_mean
      

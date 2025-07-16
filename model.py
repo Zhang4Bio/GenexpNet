@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Nov 28 16:36:41 2023
+Created on Tue Nov 28 16:36:41 2024
 
-@author: gaga6
+@author: Jialin Zhang
 """
 
 
@@ -56,5 +56,6 @@ class GenexpNet(nn.Module):
     z = self.dropout2(self.relu2(self.enc2(x)))
     x = self.enc3(z)
 
-    return x, Amat, Weighted_x, z 
+    
+    return x, Amat, Weighted_x, self.se_dec.weight.data, z 
 
