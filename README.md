@@ -1,1 +1,2 @@
 # GenexpNet:A supervised deep learning model for the annotation of high-dimensional omics gene expression data
+GenexpNet is a novel two-stage ensemble framework that combines statistical feature selection and attention-based deep learning. By introducing discriminative and collinearity feature losses, GenexpNet effectively captures informative and nonredundant features, demonstrating superior robustness and generalizability across datasets of varying complexity.
