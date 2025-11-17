@@ -5,12 +5,9 @@ Created on Tue Nov 28 16:36:41 2024
 @author: Jialin Zhang
 """
 
-
 import torch.nn as nn
 import torch
 import torch.nn.init as init
-import torch.nn.functional as F
-
 
 def _weights_init(m):
     if isinstance(m, nn.Linear):
@@ -56,6 +53,6 @@ class GenexpNet(nn.Module):
     z = self.dropout2(self.relu2(self.enc2(x)))
     x = self.enc3(z)
 
-    
     return x, Amat, Weighted_x, self.se_dec.weight.data, z 
+
 
