@@ -12,18 +12,13 @@ import json
 
 import pandas as pd
 import numpy as np
+import scanpy as sc
 
-from utils import Weight_loss,set_seed, MF_dec_loss, convert_label_to_type
+from utils import set_seed, LDF_loss, CFC_loss
 from discriminant import Discriminant_score
 from model import GenexpNet
 
-import seaborn as sns
-import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
-
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.metrics import multilabel_confusion_matrix
-from sklearn.metrics import confusion_matrix
 
 from imblearn.metrics import sensitivity_score, specificity_score
 
@@ -32,9 +27,7 @@ import torch
 import torch.utils.data as Data
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import StepLR
-
-from utils import type_to_label_dict, convert_type_to_label
-
+from torch.utils.data.sampler import WeightedRandomSampler
 
 
 import warnings
@@ -43,8 +36,7 @@ warnings.filterwarnings('ignore')
 def parse_args():
     # Training settings
     parser = argparse.ArgumentParser('argument for training')
-    parser.add_argument('--Pre_training', type=bool, default=True,
-                        help='Apply Pre-train or not')
+
     parser.add_argument("--n_epochs_pre", type=int, default=20,
                         help='Number of epochs for pre-training.')
     parser.add_argument("--n_epochs_cla", type=int, default=100,
@@ -55,36 +47,39 @@ def parse_args():
 
     # optimization
     
-    parser.add_argument('--lr_rec', type=float, default=0.01, #0.001
+    parser.add_argument('--lr_rec', type=float, default=0.1, 
                         help='pretraining learning rate.')
-    parser.add_argument('--lr_cla', type=float, default=0.0001, #0.0001
+    parser.add_argument('--lr_cla', type=float, default=0.0001, 
                         help='classification learning rate.')
-    parser.add_argument('--dropout', type=float, default=0.3,
+    parser.add_argument('--dropout', type=float, default=0.5,
                         help='Dropout rate.')
-    parser.add_argument('--beta', type=float, default=0.0001,
-                        help='Regularization rate of discriminant score.') #0.1 0.01
-    parser.add_argument('--labda', type=float, default=1000,
-                        help='Weight of discriminant loss.') #0.1 0.01
-    parser.add_argument('--enco_weight', type=float, default=1e-6,
-                        help='Weight of layer regularization loss.') #0.1 0.01
+    parser.add_argument('--beta', type=float, default=1,
+                        help='Regularization rate of discriminant score.') 
+    parser.add_argument('--w1', type=float, default=1000,
+                        help='Weight of LDF loss.') 
+    parser.add_argument('--w2', type=float, default=1,
+                        help='Weight of CFC loss.') 
     parser.add_argument('--lr_decay_steps', type=int, default=20,
                         help='Decay the learning rate interval step size')
     parser.add_argument('--lr_decay_rate', type=float, default=0.99,
                         help='Decay the learning rate')
     
     # model dataset
-    parser.add_argument('--g_num', type=int, default=2000,
-                        help='Top gene number')
-    parser.add_argument('--data_type', type=str, default='inter',
+    parser.add_argument('--oversampling', type=bool, default=True,
+                        help='Apply oversampling or not')
+    
+    parser.add_argument('--data_type', type=str, default='intra',
                         choices=[
                                 'intra',                 
-                                'inter',                           
+                                'inter',
+                                'cross_batch'
                                  ],
                         help='dataset name')
-    parser.add_argument('--dataset', type=str, default='10Xv2',
+    parser.add_argument('--dataset', type=str, default='AMB',
                         choices=[
-                                'AMB',              
-                                'Baron Human',                 
+                                'AMB',            
+                                'Baron Human',   
+                                'Segerstolpe',
                                 'TM',            
                                 'Zheng 68K',     
                                 'Zheng sorted',  
@@ -93,7 +88,11 @@ def parse_args():
                                 '10Xv3',
                                 'Drop-Seq',
                                 'inDrop',
-                                'Seq-Well'
+                                'Seq-Well',
+                                
+                                'Dendritic',
+                                'Retina(5)',
+                                'Retina(19)',
                                  ],
                         help='dataset name')
     
@@ -108,8 +107,8 @@ def parse_args():
     args.device = "cuda" if torch.cuda.is_available() else "cpu"
     return args
 
-def Attention_PREtrain(model, train_loader, optimazer_pre, scheduler_pre, ATT_loss, fisher_score, args):
-    
+#Pretrain the attention module.
+def Attention_PREtrain(model, train_loader, optimazer_pre, scheduler_pre, LDF_index, ATT_loss, args):
     model.train()
     best_epoch = 0
     best_loss = float("inf")
@@ -127,18 +126,17 @@ def Attention_PREtrain(model, train_loader, optimazer_pre, scheduler_pre, ATT_lo
             
             times=times+1
             inputs = inputs.to(args.device)
-            _,A,_,_,_ = model(inputs)
+            labels = labels.to(args.device)
 
+            _,A,_,_,_ = model(inputs)
             All_A.append(A)
-            optimazer_pre.zero_grad()
-            loss1 = Weight_loss(A,torch.from_numpy(fisher_score).to(args.device), ATT_loss)       
-            loss = loss1
+            optimazer_pre.zero_grad()      
+            loss = LDF_loss(A,torch.from_numpy(LDF_index).to(args.device), ATT_loss)
             loss.backward()
             optimazer_pre.step()
             scheduler_pre.step()
             
             train_loss += loss.item()
-            
             
         avg_train_loss = train_loss / times
         history_avg.append([epoch, avg_train_loss])
@@ -160,7 +158,7 @@ def Attention_PREtrain(model, train_loader, optimazer_pre, scheduler_pre, ATT_lo
      
     return history_avg, All_A        
 
-def CLA_train(model, train_loader, val_loader, optimizer, scheduler_cla, cla_loss, ATT_loss, fisher_score, args):
+def CLA_train(model, train_loader, val_loader, optimizer, scheduler_cla, cla_loss, LDF_index, ATT_loss, args):
     model.train()   
     best_epoch = 0
     best_loss = float("inf")
@@ -182,18 +180,16 @@ def CLA_train(model, train_loader, val_loader, optimizer, scheduler_cla, cla_los
         
             times=times+1
             inputs, labels = inputs.to(args.device), labels.type(torch.LongTensor).to(args.device)
-            #outputs,A,Weighted_X = model(inputs)
+        
             outputs,A,Weighted_X,sedec_w,z = model(inputs)
             All_A.append(A)
             W_x.append(Weighted_X)
                        
             optimizer.zero_grad()
             
-            
             loss1 = cla_loss(outputs.to(torch.float32).to(args.device),labels.type(torch.LongTensor).to(args.device))
-            loss2 = Weight_loss(A,torch.from_numpy(fisher_score).to(args.device),ATT_loss)  
-            loss = loss1 + args.labda*loss2 + args.enco_weight*MF_dec_loss(z)/len(inputs)
-
+            loss2 = LDF_loss(A,torch.from_numpy(LDF_index).to(args.device),ATT_loss)  
+            loss = loss1 + args.w1*loss2 + args.w2*CFC_loss(z)/len(inputs)
             loss.backward()
             optimizer.step()
             scheduler_cla.step()
@@ -206,18 +202,16 @@ def CLA_train(model, train_loader, val_loader, optimizer, scheduler_cla, cla_los
             temp_batch = labels.size(0)
             total_batch += temp_batch
             train_correct += correct_batch
-                       
             
         avg_train_loss = train_loss / times
         avg_train_acc = train_correct / total_batch
         
         avg_val_loss, avg_val_acc, _, _, _, _, _, _ = CLA_val(model, val_loader, cla_loss, args)
         
-        history_avg.append([epoch, avg_train_loss, avg_train_acc, avg_val_loss, avg_val_acc])
+        history_avg.append([epoch, avg_train_loss, avg_train_acc, avg_val_loss, avg_val_acc]) 
         
         All_A = torch.cat((All_A),0)
         new_x = torch.cat((W_x),0)
-        
             
         epoch_end = time.time()
         
@@ -277,61 +271,112 @@ def CLA_val(model, val_loader, criterion, args):
 
 def set_loader_Splited_scRNA(args):
     
-    train_data = pd.read_csv(
-        ''.join(['Your train dataset']),               
-        index_col = None, header=None)
-    val_data = pd.read_csv(
-        ''.join(['Your val dataset']),
-        index_col = None, header=None)
-    test_data = pd.read_csv(
-        ''.join(['Your test datasets']),    
-        index_col = None, header=None)
+    train_data = sc.read_h5ad(
+        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Train_',args.dataset,'.h5ad']))
     
-    with open(''.join(['Your nunmber-str label dict'])) as file:
+    val_data = sc.read_h5ad(
+        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','val_',args.dataset,'.h5ad']))
+    
+    test_data = sc.read_h5ad(
+        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Test_',args.dataset,'.h5ad']))
+    
+    with open(''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','Splited_',args.dataset,'/','dict_',args.dataset,'.json'])) as file:
         label_dict = json.load(file)
-        
+    
     n_row, n_col = train_data.shape
     
     print("number of samples is {}".format(n_row))
     
-    X_train = train_data.iloc[:,0:n_col-1]
-    X_val = val_data.iloc[:,0:n_col-1]
-    X_test = test_data.iloc[:,0:n_col-1]
+    X_train = pd.DataFrame(train_data.X)
+    X_val = pd.DataFrame(val_data.X)
+    X_test = pd.DataFrame(test_data.X)
     
-    y_train = train_data.iloc[:,-1]
-    y_val = val_data.iloc[:,-1]
-    y_test = test_data.iloc[:,-1]
-    
-    X_all = pd.concat([X_train, X_val, X_test], axis=0)
+    y_train = pd.DataFrame(train_data.obs.label.values)
+    y_val = pd.DataFrame(val_data.obs.label.values)
+    y_test = pd.DataFrame(test_data.obs.label.values)
+      
     y_all  = pd.concat([y_train, y_val, y_test], axis=0)
     
-      
-    dicts = type_to_label_dict(y_all)
-    
-    y_train = convert_type_to_label(y_train, dicts)
-    y_val = convert_type_to_label(y_val, dicts)
-    y_test = convert_type_to_label(y_test, dicts)
-    y_all = convert_type_to_label(y_all, dicts)
-
-    args.n_class = len(set(np.array(y_all)))
+    args.n_class = len(set(np.array(y_all.values.reshape(-1))))
     
      
     tensor_TrainValues = torch.FloatTensor(np.array(X_train)).float()
     tensor_ValValues = torch.FloatTensor(np.array(X_val)).float()
     tensor_TestValues = torch.FloatTensor(np.array(X_test)).float()
      
-    tensor_TrainLabels = torch.FloatTensor(y_train).float()
-    tensor_ValLabels = torch.FloatTensor(y_val).float()
-    tensor_TestLabels = torch.FloatTensor(y_test).float()
+    tensor_TrainLabels = torch.FloatTensor(y_train.values.reshape(-1)).float()
+    tensor_ValLabels = torch.FloatTensor(y_val.values.reshape(-1)).float()
+    tensor_TestLabels = torch.FloatTensor(y_test.values.reshape(-1)).float()
     
-    args.data_dim = n_col-1
+    args.data_dim = n_col
     
     return tensor_TrainValues, tensor_ValValues, tensor_TestValues, tensor_TrainLabels, tensor_ValLabels, tensor_TestLabels, label_dict
 
-def set_model(args):
+
+def set_loader_Splited_scRNA_OverSample(args, alpha=0.5, threshold=100): 
     
+    train_data = sc.read_h5ad(
+        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Train_',args.dataset,'.h5ad']))
+    
+    val_data = sc.read_h5ad(
+        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Test_',args.dataset,'.h5ad']))
+    
+    test_data = sc.read_h5ad(
+        ''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','splited_',args.dataset,'/','Test_',args.dataset,'.h5ad']))
+    
+    with open(''.join(['E:/My_project/GenexpNet/datasets/',args.data_type,'/preprocessed/splited/','Splited_',args.dataset,'/','dict_',args.dataset,'.json'])) as file:
+        label_dict = json.load(file)
+    
+    n_row, n_col = train_data.shape
+    
+    print("number of samples is {}".format(n_row))
+    
+    X_train = pd.DataFrame(train_data.X)
+    X_val = pd.DataFrame(val_data.X)
+    X_test = pd.DataFrame(test_data.X)
+    
+    y_train = pd.DataFrame(train_data.obs.label.values)
+    y_val = pd.DataFrame(val_data.obs.label.values)
+    y_test = pd.DataFrame(test_data.obs.label.values)
+    
+    y_all  = pd.concat([y_train, y_val, y_test], axis=0)
+    
+
+    args.n_class = len(set(np.array(y_all.values.reshape(-1))))
+    args.data_dim = n_col
+    
+     
+    tensor_TrainValues = torch.FloatTensor(np.array(X_train)).float()
+    tensor_ValValues = torch.FloatTensor(np.array(X_val)).float()
+    tensor_TestValues = torch.FloatTensor(np.array(X_test)).float()
+    
+    tensor_TrainLabels = torch.as_tensor(y_train.values.reshape(-1),dtype=torch.long)
+    tensor_ValLabels = torch.as_tensor(y_val.values.reshape(-1),dtype=torch.long)
+    tensor_TestLabels = torch.as_tensor(y_test.values.reshape(-1),dtype=torch.long)
+    
+    class_counts = torch.bincount(tensor_TrainLabels, minlength=args.n_class).clamp_min(1)
+    
+    imbalance_ratio = class_counts.max().item() / class_counts.min().item()
+    
+    if imbalance_ratio > threshold:
+        
+        class_weights = 1.0 / (class_counts.float()  ** alpha)
+        
+    else:
+        class_weights = 1.0 / class_counts.float()  
+        
+    class_weights = class_weights / class_weights.mean()
+    
+    sample_weights = class_weights[tensor_TrainLabels]
+    
+    samplers = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+
+    return tensor_TrainValues, tensor_ValValues, tensor_TestValues, tensor_TrainLabels, tensor_ValLabels, tensor_TestLabels, label_dict, samplers
+
+def set_model(args):
+
     model = GenexpNet(input_dim = args.data_dim, n_class = args.n_class, dropout = args.dropout)
-  
+
     para_cla = model.parameters()
     
     para_att = [
@@ -366,36 +411,53 @@ def main():
     
         args = parse_args()
         set_seed(args.seed)
+        
+        if args.oversampling:
+            Train_data, Val_data, Test_data, Train_label, Val_label, Test_label, label_dict, samplers = set_loader_Splited_scRNA_OverSample(args)
+        else:
+            Train_data, Val_data, Test_data, Train_label, Val_label, Test_label, label_dict = set_loader_Splited_scRNA(args)
+                
             
-        Train_data, Val_data, Test_data, Train_label, Val_label, Test_label, label_dict = set_loader_Splited_scRNA(args)
-            
-        fisher_score = Discriminant_score(Train_data.numpy(), Train_label.numpy(),args.beta)
+        LDF_index = Discriminant_score(Train_data.numpy(), Train_label.numpy(),args.beta)
             
         Train_dataset = Data.TensorDataset(Train_data, Train_label)
         Val_dataset = Data.TensorDataset(Val_data, Val_label)
         Test_dataset = Data.TensorDataset(Test_data, Test_label)
+        
+        if args.oversampling:
             
-        train_loader = torch.utils.data.DataLoader(
-                    Train_dataset,
-                    batch_size=args.batch_size,
-                    shuffle=False,
-                    drop_last=False
-                )
+            train_loader = torch.utils.data.DataLoader(
+                        Train_dataset,
+                        batch_size=args.batch_size,
+                        sampler=samplers,
+                        shuffle=False,
+                        drop_last=False
+                    )
+                
+        else:
+            train_loader = torch.utils.data.DataLoader(
+                        Train_dataset,
+                        batch_size=args.batch_size,
+                        shuffle=True,
+                        drop_last=False
+                    )
+            
+            
             
         val_loader = torch.utils.data.DataLoader(
                     Val_dataset,
-                    batch_size=1000000,
+                    batch_size=100000000,
                     shuffle=False,
                     drop_last=False
                 )
             
         test_loader = torch.utils.data.DataLoader(
                     Test_dataset,
-                    batch_size=1000000,
+                    batch_size=100000000,
                     shuffle=False,
                     drop_last=False
                 )
-            
+                  
         acc_list = list()
         f1_list = list()
         recall_list = list()
@@ -404,7 +466,6 @@ def main():
         specificity_list = list()
         times_list = list()
         
-        predict_list = list()
             
         for i in range(args.iterations):
                 print(args.dataset)
@@ -416,12 +477,11 @@ def main():
                 model, cla_loss, ATT_loss, optimazer_pre, optimizer_cla, scheduler_pre, scheduler_cla = set_model(args)
                 
                 print("==> Pre_training..")
-                history_avg, All_A  = Attention_PREtrain(model, train_loader, optimazer_pre, scheduler_pre, ATT_loss, fisher_score, args)
+                history_avg, All_A  = Attention_PREtrain(model, train_loader, optimazer_pre, scheduler_pre, LDF_index, ATT_loss, args)
                 print("==> classification learning..")
-                history_avg,best_epoch,All_A,new_x  = CLA_train(model, train_loader, val_loader, optimizer_cla, scheduler_cla, cla_loss, ATT_loss, fisher_score, args)
+                history_avg,best_epoch,All_A,new_x  = CLA_train(model, train_loader, val_loader, optimizer_cla, scheduler_cla, cla_loss, LDF_index, ATT_loss, args)
                 test_loss, test_acc, test_f1, test_recall, test_precision, test_sensitivity, test_specificity, predictions = CLA_val(model, test_loader, cla_loss, args)
                 
-                  
                 time_endtime = time.time()
                 time_cost = time_endtime-time_stratime
                 
@@ -431,7 +491,6 @@ def main():
                 precision_list.append(test_precision)
                 sensitivity_list.append(test_sensitivity)
                 specificity_list.append(test_specificity)
-                predict_list.append(convert_label_to_type(predictions.detach(),label_dict))
                 times_list.append(time_cost)
                 
                 print("==> Test.. \n  Test acc: {:.6f} | Test f1: {:.6f} | Test recall: {:.6f} | Test precision: {:.6f} | Test sensitivity: {:.6f} | Test specificity: {:.6f} | Time: {:.2f}".format(
@@ -454,15 +513,14 @@ def main():
                         "specificity" : specificity_list,
                         "time_cost" : times_list   
             }
-        
             
         result =  pd.DataFrame(contact_list)
             
-        result.to_csv(''.join(['your save path'])
+        result.to_csv(''.join(['E:/My_project/GenexpNet/datasets/result/',args.data_type,'/',args.dataset,'/','Result_GenexpNet_',args.dataset,'.csv'])
                     ,encoding='gbk',index=None)
-                
-                
+                                
 if __name__ == "__main__":
     main()        
+    
     
     
