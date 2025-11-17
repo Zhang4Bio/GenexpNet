@@ -9,22 +9,16 @@ import numpy as np
 from scipy.sparse import *
 import numba  
 
-import numpy as np 
-
-
-  
-import numpy as np
-from scipy.sparse import *
-from numpy import matrix
-
 from sklearn.preprocessing import MinMaxScaler
+
+from numpy import matrix
 
 def sequence_scale(x):
   scaler = MinMaxScaler(feature_range=(0, 1))
   score= scaler.fit_transform(x)
   return score
 
-def Discriminant_score(X, y, labda):
+def Discriminant_score(X, y, labda): #Function for calculating the LDF index.
     """
 
     Input
@@ -51,7 +45,7 @@ def Discriminant_score(X, y, labda):
     labels = np.unique(y)
     nClass = len(labels)
     total_mean = np.mean(X, axis=0)
-    lbd = labda = 0.0001
+    lbd = labda
     
     X_n = X - np.ones([nSample,nDim])*total_mean
      
@@ -84,3 +78,4 @@ def Discriminant_score(X, y, labda):
     score = sequence_scale(score).flatten()
 
     return np.transpose(score)
+
