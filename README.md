@@ -9,14 +9,13 @@ GenexpNet is a novel two-stage ensemble framework that combines statistical feat
 ```python
 Python 3.9.19
 torch 1.13.0
-numpy
-pandas
-scipy
-sklearn
-Scanpy
-anndata
-json
-random
+numpy 1.26.4
+numba 0.60.0
+pandas 2.2.2
+scipy 1.13.1
+sklearn 1.5.1
+scanpy 1.10.2
+anndata 0.10.8
 ```
 
 ## Usage
