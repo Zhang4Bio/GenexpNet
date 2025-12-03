@@ -1,22 +1,23 @@
-# GenexpNet\:A supervised deep learning model for the annotation of high-dimensional omics gene expression data
+# scAnnoNet: an attention-based deep-learning model for robust cell-type annotation across complex and cross-dataset single-cell RNA-seq data
 
 # Introduction
 
-GenexpNet is a novel two-stage ensemble framework that combines statistical feature selection and attention-based deep learning. By introducing discriminative and collinearity feature losses, GenexpNet effectively captures informative and nonredundant features, demonstrating superior robustness and generalizability across datasets of varying complexity.
+scAnnoNet is a novel two-stage ensemble model that combines statistical cell type-specific gene selection and attention-based deep learning. By introducing discriminative and collinearity feature losses, GenexpNet effectively captures informative and nonredundant signals, demonstrating superior robustness and generalizability across complex, cross-platform, and cross-batch scenarios.
 
 ## Requirement
 
 ```python
 Python 3.9.19
 torch 1.13.0
-numpy
-pandas
-scipy
-sklearn
-Scanpy
-anndata
+numpy 1.26.4
+pandas 2.2.2
+scipy 1.13.1
+sklearn 1.5.1
+Scanpy 1.10.2
+anndata 0.10.8
 json
 random
+numba 0.60.0
 ```
 
 ## Usage
