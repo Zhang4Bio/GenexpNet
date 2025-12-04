@@ -1,4 +1,4 @@
-# scAnnoNet: an attention-based deep-learning model for robust cell-type annotation across complex and cross-dataset single-cell RNA-seq data
+# scAnnoNet: an attention-based deep-learning model for robust cell-type annotation across complex and cross-dataset single-cell RNA sequencing data
 
 # Introduction
 
